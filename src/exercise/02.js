@@ -10,6 +10,24 @@ import {
   PokemonErrorBoundary,
 } from '../pokemon'
 
+function useSafeDispatch(dispatch) {
+  const mountedRef = React.useRef(false)
+
+  React.useLayoutEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+ return React.useCallback((...args) => {
+    if(mountedRef.current) {
+      dispatch(...args)
+    }
+
+  }, [dispatch])
+}
+
 // 🐨 this is going to be our generic asyncReducer
 function asyncReducer(state, action) {
   switch (action.type) {
@@ -31,20 +49,17 @@ function asyncReducer(state, action) {
   }
 }
 
-function useAsync(asyncCallback, initialState, dependencies) {
-  const [state, dispatch] = React.useReducer(asyncReducer, {
+function useAsync(initialState) {
+  const [state, unsafeDispatch] = React.useReducer(asyncReducer, {
     status: 'idle',
     data: null,
     error: null,
     ...initialState
   })
 
-  React.useEffect(() => {
-    const promise = asyncCallback()
+  const dispatch = useSafeDispatch(unsafeDispatch)
 
-    if (!promise) {
-      return
-    }
+  const run = React.useCallback(promise => {
     dispatch({type: 'pending'})
     promise.then(
       data => {
@@ -54,22 +69,25 @@ function useAsync(asyncCallback, initialState, dependencies) {
         dispatch({type: 'rejected', error})
       },
     )
-  }, dependencies)
+  }, [])
 
-  return state
+  return {...state, run}
 }
 
 function PokemonInfo({pokemonName}) {
+  const {data: pokemon, status, error, run} = useAsync({ status: pokemonName ? 'pending' : 'idle' })
 
-  // 🐨 here's how you'll use the new useAsync hook you're writing:
-  const state = useAsync(() => {
+  React.useEffect(() => {
     if (!pokemonName) {
       return
     }
-    return fetchPokemon(pokemonName)
-  }, {status: pokemonName ?'pending' : 'idle'}, [pokemonName])
-  
-  const {data: pokemon, status, error} = state
+    // 💰 note the absence of `await` here. We're literally passing the promise
+    // to `run` so `useAsync` can attach it's own `.then` handler on it to keep
+    // track of the state of the promise.
+    const pokemonPromise = fetchPokemon(pokemonName)
+    run(pokemonPromise)
+    // return run(fetchPokemon(pokemonName))
+  }, [pokemonName, run])
 
   switch (status) {
     case 'idle':
